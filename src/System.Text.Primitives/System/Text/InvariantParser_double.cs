@@ -65,145 +65,149 @@ namespace System.Text
                 /*14*/ 47,
                 /*15*/ 50,
             };
+        private static readonly short[] s_rgexp64Power10By16 =
+             {
+                // exponents for both powers of 10^16 and 0.1^16
+                /*1*/ 54,
+                /*2*/ 107,
+                /*3*/ 160,
+                /*4*/ 213,
+                /*5*/ 266,
+                /*6*/ 319,
+                /*7*/ 373,
+                /*8*/ 426,
+                /*9*/ 479,
+                /*10*/ 532,
+                /*11*/ 585,
+                /*12*/ 638,
+                /*13*/ 691,
+                /*14*/ 745,
+                /*15*/ 798,
+                /*16*/ 851,
+                /*17*/ 904,
+                /*18*/ 957,
+                /*19*/ 1010,
+                /*20*/ 1064,
+                /*21*/ 1117,
+            };
+        private static readonly ulong[] s_rgval64Power10By16 =
+            {
+                // powers of 10^16
+                /*1*/ 0x8e1bc9bf04000000,
+                /*2*/ 0x9dc5ada82b70b59e,
+                /*3*/ 0xaf298d050e4395d6,
+                /*4*/ 0xc2781f49ffcfa6d4,
+                /*5*/ 0xd7e77a8f87daf7fa,
+                /*6*/ 0xefb3ab16c59b14a0,
+                /*7*/ 0x850fadc09923329c,
+                /*8*/ 0x93ba47c980e98cde,
+                /*9*/ 0xa402b9c5a8d3a6e6,
+                /*10*/ 0xb616a12b7fe617a8,
+                /*11*/ 0xca28a291859bbf90,
+                /*12*/ 0xe070f78d39275566,
+                /*13*/ 0xf92e0c3537826140,
+                /*14*/ 0x8a5296ffe33cc92c,
+                /*15*/ 0x9991a6f3d6bf1762,
+                /*16*/ 0xaa7eebfb9df9de8a,
+                /*17*/ 0xbd49d14aa79dbc7e,
+                /*18*/ 0xd226fc195c6a2f88,
+                /*19*/ 0xe950df20247c83f8,
+                /*20*/ 0x81842f29f2cce373,
+                /*21*/ 0x8fcac257558ee4e2,
+
+                // powers of 0.1^16
+                /*1*/ 0xe69594bec44de160,
+                /*2*/ 0xcfb11ead453994c3,
+                /*3*/ 0xbb127c53b17ec165,
+                /*4*/ 0xa87fea27a539e9b3,
+                /*5*/ 0x97c560ba6b0919b5,
+                /*6*/ 0x88b402f7fd7553ab,
+                /*7*/ 0xf64335bcf065d3a0,
+                /*8*/ 0xddd0467c64bce4c4,
+                /*9*/ 0xc7caba6e7c5382ed,
+                /*10*/ 0xb3f4e093db73a0b7,
+                /*11*/ 0xa21727db38cb0053,
+                /*12*/ 0x91ff83775423cc29,
+                /*13*/ 0x8380dea93da4bc82,
+                /*14*/ 0xece53cec4a314f00,
+                /*15*/ 0xd5605fcdcf32e217,
+                /*16*/ 0xc0314325637a1978,
+                /*17*/ 0xad1c8eab5ee43ba2,
+                /*18*/ 0x9becce62836ac5b0,
+                /*19*/ 0x8c71dcd9ba0b495c,
+                /*20*/ 0xfd00b89747823938,
+                /*21*/ 0xe3e27a444d8d991a,
+            };
         #endregion
 
-        private static unsafe bool TryBufferToDouble(byte[] number, int byteIndex, out double value)
+        private static int BufferToDouble(byte[] buffer, int index, out double value)
         {
-            ulong val;
-            int exp;
-            int remaining;
-            int length;
-            int count;
-            int scale;
-            int absscale;
-            int index;
+            int scale = 0;
+            bool negative = false;
+            bool eNeg = false;
+            bool nonZero = false;
+            int maxParseDigits = 32;
+            int bytesConsumed = 0;
 
-            length = number.Length;
-            remaining = length;
+            int digStart = 0;
+            int digEnd = 0;
+            bool decimalPlace = false;
 
-            // skip the leading zeros
-            while (number[byteIndex] == '0')
+            if (buffer[index] == '-')
             {
-                remaining--;
-                byteIndex++;
+                negative = true;
+                bytesConsumed++;
+                index++;
+            }
+            else if (buffer[index] == '+')
+            {
+                bytesConsumed++;
+                index++;
             }
 
-            if (remaining == 0)
+            byte nextByte = buffer[index];
+            byte nextByteVal = (byte)(nextByte - '0');
+
+            if (nextByteVal > 9)
             {
                 value = 0;
-                return true;
+                return 0;
             }
 
-            count = Min(remaining, 9);
-            remaining -= count;
-            val = DigitsToInt(number, byteIndex, count);
-
-            if (remaining > 0)
+            while (nextByteVal == 0) // Exhaust any initial zeroes
             {
-                count = Min(remaining, 9);
-                remaining -= count;
-
-                // get the denormalized power of 10
-                uint mult = (uint)(s_rgval64Power10[count - 1] >> (64 - s_rgexp64Power10[count - 1]));
-                val = Mul32x32To64((uint)val, mult) + DigitsToInt(number, byteIndex + 9, count);
+                nextByte = buffer[++index];
+                nextByteVal = (byte)(nextByte - '0');
+                bytesConsumed++;
             }
 
-            scale = number.scale - (length - remaining);
-            absscale = abs(scale);
-            if (absscale >= 22 * 16)
+            digStart = index;
+            while (nextByteVal <= 9 || nextByte == '.')
             {
-                // overflow / underflow
-                ulong result = (scale > 0) ? 0x7FF0000000000000 : 0ul;
-                if (number.sign)
-                    result |= 0x8000000000000000;
-                return *(double*)&result;
-            }
-
-            exp = 64;
-
-            // normalize the mantissa
-            if ((val & 0xFFFFFFFF00000000) == 0) { val <<= 32; exp -= 32; }
-            if ((val & 0xFFFF000000000000) == 0) { val <<= 16; exp -= 16; }
-            if ((val & 0xFF00000000000000) == 0) { val <<= 8; exp -= 8; }
-            if ((val & 0xF000000000000000) == 0) { val <<= 4; exp -= 4; }
-            if ((val & 0xC000000000000000) == 0) { val <<= 2; exp -= 2; }
-            if ((val & 0x8000000000000000) == 0) { val <<= 1; exp -= 1; }
-
-            index = absscale & 15;
-            if (index != 0)
-            {
-                int multexp = s_rgexp64Power10[index - 1];
-                // the exponents are shared between the inverted and regular table
-                exp += (scale < 0) ? (-multexp + 1) : multexp;
-
-                ulong multval = s_rgval64Power10[index + ((scale < 0) ? 15 : 0) - 1];
-                val = Mul64Lossy(val, multval, ref exp);
-            }
-
-            index = absscale >> 4;
-            if (index != 0)
-            {
-                int multexp = s_rgexp64Power10By16[index - 1];
-                // the exponents are shared between the inverted and regular table
-                exp += (scale < 0) ? (-multexp + 1) : multexp;
-
-                ulong multval = s_rgval64Power10By16[index + ((scale < 0) ? 21 : 0) - 1];
-                val = Mul64Lossy(val, multval, ref exp);
-            }
-
-
-            // round & scale down
-            if (((int)val & (1 << 10)) != 0)
-            {
-                // IEEE round to even
-                ulong tmp = val + ((1 << 10) - 1) + (ulong)(((int)val >> 11) & 1);
-                if (tmp < val)
+                if (nextByte == '.')
                 {
-                    // overflow
-                    tmp = (tmp >> 1) | 0x8000000000000000;
-                    exp += 1;
+                    decimalPlace = true;
                 }
-                val = tmp;
+                else if (!decimalPlace)
+                {
+                    scale++;
+                }
+                nextByte = buffer[++index];
+                nextByteVal = (byte)(nextByte - '0');
+                bytesConsumed++;
             }
+            digEnd = index - 1;
 
-            // return the exponent to a biased state
-            exp += 0x3FE;
-
-            // handle overflow, underflow, "Epsilon - 1/2 Epsilon", denormalized, and the normal case
-            if (exp <= 0)
+            if (nextByte == 'e' || nextByte == 'E')
             {
-                if (exp == -52 && (val >= 0x8000000000000058))
+                nextByte = buffer[++index];
+                bytesConsumed++;
+
+                if (nextByte == '-')
                 {
-                    // round X where {Epsilon > X >= 2.470328229206232730000000E-324} up to Epsilon (instead of down to zero)
-                    val = 0x0000000000000001;
-                }
-                else if (exp <= -52)
-                {
-                    // underflow
-                    val = 0;
-                }
-                else
-                {
-                    // denormalized
-                    val >>= (-exp + 11 + 1);
+
                 }
             }
-            else if (exp >= 0x7FF)
-            {
-                // overflow
-                val = 0x7FF0000000000000;
-            }
-            else
-            {
-                // normal postive exponent case
-                val = ((ulong)exp << 52) + ((val >> 11) & 0x000FFFFFFFFFFFFF);
-            }
-
-            if (number.sign)
-                val |= 0x8000000000000000;
-
-            value =  *(double*)&val;
-            return true;
         }
         private static uint DigitsToInt(byte[] p, int index, int count)
         {
@@ -224,6 +228,24 @@ namespace System.Text
         {
             return (ulong)a * (ulong)b;
         }
+        private static ulong Mul64Lossy(ulong a, ulong b, ref int pexp)
+        {
+            // it's ok to lose some precision here - Mul64 will be called
+            // at most twice during the conversion, so the error won't propagate
+            // to any of the 53 significant bits of the result
+            ulong val = Mul32x32To64((uint)(a >> 32), (uint)(b >> 32)) +
+                (Mul32x32To64((uint)(a >> 32), (uint)(b)) >> 32) +
+                (Mul32x32To64((uint)(a), (uint)(b >> 32)) >> 32);
+
+            // normalize
+            if ((val & 0x8000000000000000) == 0)
+            {
+                val <<= 1;
+                pexp -= 1;
+            }
+
+            return val;
+        }
         private static int abs(int a)
         {
             return a > -a ? a : -a;
@@ -240,8 +262,9 @@ namespace System.Text
             }
 
             value = 0.0;
-            bytesConsumed = 0;
-            return TryBufferToDouble(utf8Text, index, out value);
+            bytesConsumed = BufferToDouble(utf8Text, index, out value);
+            return (bytesConsumed > 0);
+
         }
 
         public unsafe static bool TryParse(byte* utf8Text, int index, int length, out double value, out int bytesConsumed)
