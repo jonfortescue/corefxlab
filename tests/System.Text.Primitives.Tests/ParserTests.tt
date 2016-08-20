@@ -70,6 +70,31 @@ namespace System.Text.Primitives.Tests
 #>
 		#region <#= unsignedPrimitives[i] #>
 
+		[Theory]
+        [InlineData("<#= midValue #>", true, 0, <#= midValue #>, <#= midValue.Length #>)]
+        [InlineData("blahblahh<#= randValue #>", true, 9, <#= randValue #>, <#= randValue.Length #>)]
+        [InlineData("<#= randValue #>abhced", true, 0, <#= randValue #>, <#= randValue.Length #>)]
+        [InlineData("<#= minValue #>", true, 0, <#= minValue #>, <#= minValueLength #>)] // min value
+        [InlineData("<#= maxValue #>", true, 0, <#= maxValue #>, <#= maxValueLength #>)] // max value
+        [InlineData("I am 1", false, 0, 0, 0)] // invalid character test
+        [InlineData(" !", false, 0, 0, 0)] // invalid character test w/ char < '0'
+        [InlineData("<#= overflowValue #>", false, 0, 0, 0)] // overflow test
+        public unsafe void ParseCustomCultureByteArrayTo<#= capitalizedPrimitive #>(string text, bool expectSuccess, int index, <#= unsignedPrimitives[i] #> expectedValue, int expectedBytesConsumed)
+        {
+            <#= unsignedPrimitives[i] #> parsedValue;
+            int bytesConsumed;
+            FormattingData fd = new FormattingData(new byte[] { 48 }, new byte[] { 49 }, new byte[] { 50 }, new byte[] { 51 }, new byte[] { 52 },
+                new byte[] { 53 }, new byte[] { 54 }, new byte[] { 55 }, new byte[] { 56 }, new byte[] { 57 }, new byte[] { 46 }, null,
+                new byte[] { 73, 110, 102, 105, 110, 105, 116, 121 }, new byte[] { 45 }, new byte[] { 43 }, new byte[] { 78, 97, 78 }, new byte[] { 69 }, new byte[] { 101 },
+                FormattingData.Encoding.Utf8, (byte)FormattingData.ParsingStates.PARSING);
+            Format.Parsed nf = new Format.Parsed('G');
+            bool result = InvariantParser.TryParse(UtfEncode(text, false), index, fd, nf, out parsedValue, out bytesConsumed);
+
+            Assert.Equal(expectSuccess, result);
+            Assert.Equal(expectedValue, parsedValue);
+            Assert.Equal(expectedBytesConsumed, bytesConsumed);
+        }
+
 <#
 			foreach (var utfEncoding in utfEncodings)
 			{
@@ -173,6 +198,69 @@ namespace System.Text.Primitives.Tests
 
 #>
 		#region <#= signedPrimitives[i] #>
+
+		[Theory]
+        [InlineData("111", true, 0, 111, 3)]
+        [InlineData("blahblahh<#= midValue #>", true, 9, <#= midValue #>, <#= midValue.Length #>)]
+        [InlineData("<#= randValue #>abcdefg", true, 0, <#= randValue #>, <#= randValue.Length #>)]
+        [InlineData("The smallest of this type is <#= minValue #>.", true, 29, <#= minValue #>, <#= minValueLength #>)]
+        [InlineData("Letthem<#= midMinValue #>eatcake", true, 7, <#= midMinValue #>, <#= midMinValue.Length #>)]
+        [InlineData("<#= maxValue #>", true, 0, <#= maxValue #>, <#= maxValueLength #>)] // max
+        [InlineData("<#= minValue #>", true, 0, <#= minValue #>, <#= minValueLength #>)] // min
+        [InlineData("-A", false, 0, 0, 0)] // invalid character after a sign
+        [InlineData("I am 1", false, 0, 0, 0)] // invalid character test
+        [InlineData(" !", false, 0, 0, 0)] // invalid character test w/ char < '0'
+        [InlineData("<#= overflowValue #>", false, 0, 0, 0)] // positive overflow test
+        [InlineData("<#= underflowValue #>", false, 0, 0, 0)] // negative overflow test
+        public unsafe void ParseCustomCultureByteArrayTo<#= capitalizedPrimitive #>(string text, bool expectSuccess, int index, <#= signedPrimitives[i] #> expectedValue, int expectedBytesConsumed)
+        {
+            <#= signedPrimitives[i] #> parsedValue;
+            int bytesConsumed;
+            FormattingData fd = new FormattingData(new byte[] { 48 }, new byte[] { 49 }, new byte[] { 50 }, new byte[] { 51 }, new byte[] { 52 },
+                new byte[] { 53 }, new byte[] { 54 }, new byte[] { 55 }, new byte[] { 56 }, new byte[] { 57 }, new byte[] { 46 }, null,
+                new byte[] { 73, 110, 102, 105, 110, 105, 116, 121 }, new byte[] { 45 }, new byte[] { 43 }, new byte[] { 78, 97, 78 }, new byte[] { 69 }, new byte[] { 101 },
+                FormattingData.Encoding.Utf8, (byte)FormattingData.ParsingStates.PARSING);
+            Format.Parsed nf = new Format.Parsed('G');
+            bool result = InvariantParser.TryParse(UtfEncode(text, false), index, fd, nf, out parsedValue, out bytesConsumed);
+
+            Assert.Equal(expectSuccess, result);
+            Assert.Equal(expectedValue, parsedValue);
+            Assert.Equal(expectedBytesConsumed, bytesConsumed);
+        }
+
+		[Theory]
+        [InlineData("๑๑๑", true, 0, 111, 9)]
+        [InlineData("เรื่องเหลวไหล๒๗", true, 39, 27, 6)]
+        [InlineData("๕๖กขฃคฅฆง", true, 0, 56, 6)]
+        [InlineData("ที่เล็กที่สุดของประเภทนี้คือลบ๑๒๘.", true, 84, -128, 15)]
+        [InlineData("ปล่อยให้พวกเขา ลบ๒๘ กินเค้ก", true, 43, -28, 12)]
+        [InlineData("๑๒๗", true, 0, 127, 9)] // max
+        [InlineData("ลบ๑๒๘", true, 0, -128, 15)] // min
+        [InlineData("ลบA", false, 0, 0, 0)] // invalid character after a sign
+        [InlineData("I am ๑", false, 0, 0, 0)] // invalid character test
+        [InlineData(" !", false, 0, 0, 0)] // invalid character test w/ char < '0'
+        [InlineData("ลป๑", false, 0, 0, 0)] // 
+        public unsafe void ParseCustomCultureThaiByteArrayTo<#= capitalizedPrimitive #>(string text, bool expectSuccess, int index, <#= signedPrimitives[i] #> expectedValue, int expectedBytesConsumed)
+        {
+            <#= signedPrimitives[i] #> parsedValue;
+            int bytesConsumed;
+            FormattingData fd = new FormattingData(new byte[] { 0xe0, 0xb9, 0x90 }, new byte[] { 0xe0, 0xb9, 0x91 }, new byte[] { 0xe0, 0xb9, 0x92 },
+                new byte[] { 0xe0, 0xb9, 0x93 }, new byte[] { 0xe0, 0xb9, 0x94 }, new byte[] { 0xe0, 0xb9, 0x95 }, new byte[] { 0xe0, 0xb9, 0x96 },
+                new byte[] { 0xe0, 0xb9, 0x97 }, new byte[] { 0xe0, 0xb9, 0x98 }, new byte[] { 0xe0, 0xb9, 0x99 }, new byte[] { 0xE0, 0xB8, 0x88, 0xE0, 0xB8, 0x94 }, null,
+                new byte[] { 0xE0, 0xB8, 0xAA, 0xE0, 0xB8, 0xB4, 0xE0, 0xB9, 0x88, 0xE0, 0xB8, 0x87, 0xE0, 0xB8, 0x97, 0xE0, 0xB8, 0xB5, 0xE0, 0xB9, 0x88, 0xE0, 0xB9, 0x83,
+                    0xE0, 0xB8, 0xAB, 0xE0, 0xB8, 0x8D, 0xE0, 0xB9, 0x88, 0xE0, 0xB9, 0x82, 0xE0, 0xB8, 0x95, 0xE0, 0xB9, 0x80, 0xE0, 0xB8, 0xAB, 0xE0, 0xB8, 0xA5, 0xE0,
+                    0xB8, 0xB7, 0xE0, 0xB8, 0xAD, 0xE0, 0xB9, 0x80, 0xE0, 0xB8, 0x81, 0xE0, 0xB8, 0xB4, 0xE0, 0xB8, 0x99 },
+                new byte[] { 0xE0, 0xB8, 0xA5, 0xE0, 0xB8, 0x9A }, new byte[] { 43 }, new byte[] { 0xE0, 0xB9, 0x84, 0xE0, 0xB8, 0xA1, 0xE0, 0xB9, 0x88, 0xE0, 0xB9,
+                    0x83, 0xE0, 0xB8, 0x8A, 0xE0, 0xB9, 0x88, 0xE0, 0xB8, 0x95, 0xE0, 0xB8, 0xB1, 0xE0, 0xB8, 0xA7, 0xE0, 0xB9, 0x80, 0xE0, 0xB8, 0xA5, 0xE0, 0xB8, 0x82 },
+                new byte[] { 69 }, new byte[] { 101 },
+                FormattingData.Encoding.Utf8, (byte)FormattingData.ParsingStates.PARSING);
+            Format.Parsed nf = new Format.Parsed('G');
+            bool result = InvariantParser.TryParse(UtfEncode(text, false), index, fd, nf, out parsedValue, out bytesConsumed);
+
+            Assert.Equal(expectSuccess, result);
+            Assert.Equal(expectedValue, parsedValue);
+            Assert.Equal(expectedBytesConsumed, bytesConsumed);
+        }
 
 <#
 			foreach (var utfEncoding in utfEncodings)
