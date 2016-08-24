@@ -13,9 +13,7 @@ namespace System.Text
         private static FormattingData s_invariantUtf16;
         private static FormattingData s_invariantUtf8;
         private byte[][] _digitsAndSymbols; // this could be flattened into a single array
-        private List<TrieNode> _parsingTrieList; // The parent nodes of the trie
-        private List<TrieNode> _childTrieNodes; // The child nodes of the trie. These two lists could be flattened into one
-                                                // but I went with this architecture because it is very efficient for the common flat-trie case
+        private byte[] _parsingTrie;
         private Encoding _encoding;
 
         public enum Encoding
@@ -32,21 +30,18 @@ namespace System.Text
             LAZY_PARSING = 3 // construct it but allocate lazy. 3 is chosen so the bitwise check below work
         }
 
+        public FormattingData(byte[][] digitsAndSymbols, byte[] parsingTrie, Encoding encoding)
+        {
+            _digitsAndSymbols = digitsAndSymbols;
+            _encoding = encoding;
+            _parsingTrie = parsingTrie;
+        }
+
         public FormattingData(byte[][] digitsAndSymbols, Encoding encoding, byte parsing = (byte)ParsingStates.NO_PARSING)
         {
             _digitsAndSymbols = digitsAndSymbols;
             _encoding = encoding;
-            if (((byte)parsing & (byte)ParsingStates.PARSING) == 1) // both PARSING and LAZY_PARSING pass this check
-            {
-                _parsingTrieList = new List<TrieNode>();
-                _childTrieNodes = new List<TrieNode>();
-                ConstructParsingTrie(parsing == (byte)ParsingStates.LAZY_PARSING);
-            }
-            else
-            {
-                _parsingTrieList = null;
-                _childTrieNodes = null;
-            }
+            _parsingTrie = null;
         }
         /// <summary>
         /// Construct a formatting data by specifying the bytes for each value
@@ -78,202 +73,206 @@ namespace System.Text
         {
             // This constructor simple calls the base constructor
         }
-        private class TrieNode
-        {
-            public byte? ByteValue { get; set; } // nullable byte is used so that the null-value can be used           (0x02)
-                                                 // to represent a prefixed value for example, if two byte           /       \
-                                                 // sequences { 0x01 } and { 0x01, 0x02} are used                 (null)    (0x03)
-                                                 // in the encoding, the trie will be constructed as shown        {0x01} {0x01, 0x02}
-            public List<int> ChildIndices { get; set; } // these values index into one of two things:
-                                                        // 1) if IsLeaf is false, this is a branch, which means these index into _childTrieNodes and
-                                                        //    refer to the children of these nodes
-                                                        // 2) if IsLeaf is true, this is a leaf, which means these index into _digitsAndSymbols and
-                                                        //    refer to specific digit or symbolic values
-                                                        // int indices are used so that we only have two List<TrieNodes>
-            public bool IsLeaf { get; set; }
+        
 
-            public TrieNode(byte? byteValue, int index, bool isLeaf = true)
-            {
-                ByteValue = byteValue;
-                ChildIndices = new List<int>(new int[] { index }); // indicies are stored as ints (as opposed to bytes) because you can have arbitrarily large tries
-                IsLeaf = isLeaf;
-            }
-        }
+        // Leaving this code here for now so we can move it to a tool to construct the parsing trie
+        //
+        //private class TrieNode
+        //{
+        //    public byte? ByteValue { get; set; } // nullable byte is used so that the null-value can be used           (0x02)
+        //                                         // to represent a prefixed value for example, if two byte           /       \
+        //                                         // sequences { 0x01 } and { 0x01, 0x02} are used                 (null)    (0x03)
+        //                                         // in the encoding, the trie will be constructed as shown        {0x01} {0x01, 0x02}
+        //    public List<int> ChildIndices { get; set; } // these values index into one of two things:
+        //                                                // 1) if IsLeaf is false, this is a branch, which means these index into _childTrieNodes and
+        //                                                //    refer to the children of these nodes
+        //                                                // 2) if IsLeaf is true, this is a leaf, which means these index into _digitsAndSymbols and
+        //                                                //    refer to specific digit or symbolic values
+        //                                                // int indices are used so that we only have two List<TrieNodes>
+        //    public bool IsLeaf { get; set; }
 
-        private void ConstructParsingTrie(bool lazily = false)
-        {
-            // TODO: Implement lazy construction
+        //    public TrieNode(byte? byteValue, int index, bool isLeaf = true)
+        //    {
+        //        ByteValue = byteValue;
+        //        ChildIndices = new List<int>(new int[] { index }); // indicies are stored as ints (as opposed to bytes) because you can have arbitrarily large tries
+        //        IsLeaf = isLeaf;
+        //    }
+        //}
+        //private void ConstructParsingTrie(bool lazily = false)
+        //{
+        //    // TODO: Implement lazy construction
 
-            int skippedValues = 0;
-            // We construct the initial layer of the trie using an insertion sort. This has two benefits:
-            // 1. _parsingTrie is now pre-sorted via insertion sort, which is fast for arrays of small size
-            // 2. We are alerted of any collisions that occur, which means we can construct the trie efficiently
-            for (int i = 0; i < _digitsAndSymbols.Length; i++)
-            {
-                // If the encoding doesn't specify a particular symbol, we skip over it. This allows for optional parameters
-                if (_digitsAndSymbols[i] == null || _digitsAndSymbols.Length == 0)
-                {
-                    skippedValues++;
-                    continue;
-                }
-                byte temp = _digitsAndSymbols[i][0];
-                int j;
-                // the insertion sort loop. This is pretty standard
-                for (j = i - skippedValues - 1; j >= 0 && _parsingTrieList[j].ByteValue > temp; j--)
-                {
-                    if (j + 1 == _parsingTrieList.Count) // if we're at the end of the list, we append it
-                        _parsingTrieList.Add(_parsingTrieList[j]);
-                    else // otherwise, we swap
-                        _parsingTrieList[j + 1] = _parsingTrieList[j];
-                }
-                if (_parsingTrieList.Count < 1) // if this is the first element, we should just add it to the list
-                {
-                    _parsingTrieList.Add(new TrieNode(temp, i));
-                }
-                else if (j == -1) // we have to check for this before the collision check so that we don't throw an index error
-                {
-                    _parsingTrieList[j + 1] = new TrieNode(temp, i); // this completes the swap
-                }
-                else if (_parsingTrieList[j].ByteValue == temp) // if a collision occurred
-                {
-                    CreateChildNode(_parsingTrieList[j], i, 1); // we need to create a child node (start building the trie)
-                    skippedValues++;
-                }
-                else if (j >= _parsingTrieList.Count - 1) // if we're at the end of the list, then we just append it
-                {
-                    _parsingTrieList.Add(new TrieNode(temp, i));
-                }
-                else
-                {
-                    _parsingTrieList[j + 1] = new TrieNode(temp, i); // this completes the swap
-                }
-            }
-        }
-        private void CreateChildNode(TrieNode node, int newIndex, int level)
-        {
-            CreateChildNode(node, newIndex, node.ChildIndices[0], level);
-        }
-        private void CreateChildNode(TrieNode node, int newIndex, int oldIndex, int level)
-        {
-            byte? newByteValue = DisambiguateByteValue(newIndex, level); // this is the value we're attempting to place in the trie
+        //    int skippedValues = 0;
+        //    // We construct the initial layer of the trie using an insertion sort. This has two benefits:
+        //    // 1. _parsingTrie is now pre-sorted via insertion sort, which is fast for arrays of small size
+        //    // 2. We are alerted of any collisions that occur, which means we can construct the trie efficiently
+        //    for (int i = 0; i < _digitsAndSymbols.Length; i++)
+        //    {
+        //        // If the encoding doesn't specify a particular symbol, we skip over it. This allows for optional parameters
+        //        if (_digitsAndSymbols[i] == null || _digitsAndSymbols.Length == 0)
+        //        {
+        //            skippedValues++;
+        //            continue;
+        //        }
+        //        byte temp = _digitsAndSymbols[i][0];
+        //        int j;
+        //        // the insertion sort loop. This is pretty standard
+        //        for (j = i - skippedValues - 1; j >= 0 && _parsingTrieList[j].ByteValue > temp; j--)
+        //        {
+        //            if (j + 1 == _parsingTrieList.Count) // if we're at the end of the list, we append it
+        //                _parsingTrieList.Add(_parsingTrieList[j]);
+        //            else // otherwise, we swap
+        //                _parsingTrieList[j + 1] = _parsingTrieList[j];
+        //        }
+        //        if (_parsingTrieList.Count < 1) // if this is the first element, we should just add it to the list
+        //        {
+        //            _parsingTrieList.Add(new TrieNode(temp, i));
+        //        }
+        //        else if (j == -1) // we have to check for this before the collision check so that we don't throw an index error
+        //        {
+        //            _parsingTrieList[j + 1] = new TrieNode(temp, i); // this completes the swap
+        //        }
+        //        else if (_parsingTrieList[j].ByteValue == temp) // if a collision occurred
+        //        {
+        //            CreateChildNode(_parsingTrieList[j], i, 1); // we need to create a child node (start building the trie)
+        //            skippedValues++;
+        //        }
+        //        else if (j >= _parsingTrieList.Count - 1) // if we're at the end of the list, then we just append it
+        //        {
+        //            _parsingTrieList.Add(new TrieNode(temp, i));
+        //        }
+        //        else
+        //        {
+        //            _parsingTrieList[j + 1] = new TrieNode(temp, i); // this completes the swap
+        //        }
+        //    }
+        //}
+        //private void CreateChildNode(TrieNode node, int newIndex, int level)
+        //{
+        //    CreateChildNode(node, newIndex, node.ChildIndices[0], level);
+        //}
+        //private void CreateChildNode(TrieNode node, int newIndex, int oldIndex, int level)
+        //{
+        //    byte? newByteValue = DisambiguateByteValue(newIndex, level); // this is the value we're attempting to place in the trie
 
-            // If the node is a leaf, we know we have reached the bottom of the trie.
-            if (node.IsLeaf)
-            {
-                node.IsLeaf = false; // this is now a branch, not a leaf
-                byte? oldByteValue = DisambiguateByteValue(oldIndex, level);
-                if (newByteValue == oldByteValue)   // this means there's another collision, so we have to go down one level more
-                {
-                    if (oldByteValue == null)   // if both values are null, we have identical code units, which is bad
-                    {
-                        throw new ArgumentException("Invalid mapping: two values map to the same code unit.");
-                    }
-                    else
-                    {
-                        TrieNode newNode = new TrieNode(newByteValue, oldIndex);    // we create a new node. it references the old index for now since we want that
-                        CreateChildNode(newNode, newIndex, level + 1);              // index to propagate recursively when we call this again
-                        _childTrieNodes.Add(newNode);                               // after the recursion is complete, we add our new node to the list
-                        node.ChildIndices.Clear();                                              // we clear the old values
-                        node.ChildIndices.AddRange(new int[] { _childTrieNodes.Count - 1 });    // and add the reference to the newly constructed node
-                        return;
-                    }
-                }
-                else if (oldByteValue == null || oldByteValue < newByteValue)   // if there isn't a collision, we select the order we want to insert these nodes into
-                {                                                               // the list. This makes it so that our indices are sorted, which allows us to binary
-                    _childTrieNodes.Add(new TrieNode(oldByteValue, oldIndex));  // search the indices to recover info in O(logN).
-                    _childTrieNodes.Add(new TrieNode(newByteValue, newIndex));
-                }
-                else
-                {
-                    _childTrieNodes.Add(new TrieNode(newByteValue, newIndex));
-                    _childTrieNodes.Add(new TrieNode(oldByteValue, oldIndex));
-                }
-                node.ChildIndices.Clear();
-                node.ChildIndices.AddRange(new int[] { _childTrieNodes.Count - 2, _childTrieNodes.Count - 1 }); // we now have two branches coming from this node
-                return;
-            }
-            else    // if this is not a leaf, we need to add a new branch to the appropriate spot
-            {
-                var search = BinarySearch(node, level, newByteValue);   // we search to see if this value already exists in the branches
+        //    // If the node is a leaf, we know we have reached the bottom of the trie.
+        //    if (node.IsLeaf)
+        //    {
+        //        node.IsLeaf = false; // this is now a branch, not a leaf
+        //        byte? oldByteValue = DisambiguateByteValue(oldIndex, level);
+        //        if (newByteValue == oldByteValue)   // this means there's another collision, so we have to go down one level more
+        //        {
+        //            if (oldByteValue == null)   // if both values are null, we have identical code units, which is bad
+        //            {
+        //                throw new ArgumentException("Invalid mapping: two values map to the same code unit.");
+        //            }
+        //            else
+        //            {
+        //                TrieNode newNode = new TrieNode(newByteValue, oldIndex);    // we create a new node. it references the old index for now since we want that
+        //                CreateChildNode(newNode, newIndex, level + 1);              // index to propagate recursively when we call this again
+        //                _childTrieNodes.Add(newNode);                               // after the recursion is complete, we add our new node to the list
+        //                node.ChildIndices.Clear();                                              // we clear the old values
+        //                node.ChildIndices.AddRange(new int[] { _childTrieNodes.Count - 1 });    // and add the reference to the newly constructed node
+        //                return;
+        //            }
+        //        }
+        //        else if (oldByteValue == null || oldByteValue < newByteValue)   // if there isn't a collision, we select the order we want to insert these nodes into
+        //        {                                                               // the list. This makes it so that our indices are sorted, which allows us to binary
+        //            _childTrieNodes.Add(new TrieNode(oldByteValue, oldIndex));  // search the indices to recover info in O(logN).
+        //            _childTrieNodes.Add(new TrieNode(newByteValue, newIndex));
+        //        }
+        //        else
+        //        {
+        //            _childTrieNodes.Add(new TrieNode(newByteValue, newIndex));
+        //            _childTrieNodes.Add(new TrieNode(oldByteValue, oldIndex));
+        //        }
+        //        node.ChildIndices.Clear();
+        //        node.ChildIndices.AddRange(new int[] { _childTrieNodes.Count - 2, _childTrieNodes.Count - 1 }); // we now have two branches coming from this node
+        //        return;
+        //    }
+        //    else    // if this is not a leaf, we need to add a new branch to the appropriate spot
+        //    {
+        //        var search = BinarySearch(node, level, newByteValue);   // we search to see if this value already exists in the branches
 
-                if (search.Item1)   // if it does exist within the branches
-                {
-                    CreateChildNode(_childTrieNodes[node.ChildIndices[search.Item2]], newIndex, level + 1); // we need to recurse down that branch
-                }
-                else    // if it doesn't exist, then we get to add a new branch to this node
-                {
-                    _childTrieNodes.Add(new TrieNode(newByteValue, newIndex));          // we create the new node
-                    node.ChildIndices.Insert(search.Item2, _childTrieNodes.Count - 1);  // and then insert at the appropriate index to keep the indices sorted
-                    return;
-                }
-            }
-            
-        }
-        private byte? DisambiguateMiddleValue(TrieNode node, int level, int m)
-        {
-            if (node.IsLeaf)
-                return DisambiguateByteValue(node.ChildIndices[m], level);
-            else
-                return _childTrieNodes[node.ChildIndices[m]].ByteValue;
-        }
-        // This binary search implementation returns a tuple:
-        // * a bool which represents whether the search completed successfully
-        // * an int representing either:
-        //      - the index of the item searched for
-        //      - the index of the location where the item should be placed to maintain a sorted list
-        // Because of the second function, a tuple is necessary since we cannot return -1 to represent a failed search 
-        private Tuple<bool, int> BinarySearch(TrieNode node, int level, byte? value)
-        {
-            int leftBound = 0, rightBound = node.ChildIndices.Count - 1;
-            int midIndex = 0;
-            while (true)
-            {
-                if (leftBound > rightBound)  // if the search failed
-                {
-                    // this loop is necessary because binary search takes the floor
-                    // of the middle, which means it can give incorrect indices for insertion.
-                    // we should never iterate up more than two indices.
-                    while (midIndex < node.ChildIndices.Count)
-                    {
-                        byte? middleValue = DisambiguateMiddleValue(node, level, midIndex);
+        //        if (search.Item1)   // if it does exist within the branches
+        //        {
+        //            CreateChildNode(_childTrieNodes[node.ChildIndices[search.Item2]], newIndex, level + 1); // we need to recurse down that branch
+        //        }
+        //        else    // if it doesn't exist, then we get to add a new branch to this node
+        //        {
+        //            _childTrieNodes.Add(new TrieNode(newByteValue, newIndex));          // we create the new node
+        //            node.ChildIndices.Insert(search.Item2, _childTrieNodes.Count - 1);  // and then insert at the appropriate index to keep the indices sorted
+        //            return;
+        //        }
+        //    }
 
-                        if (middleValue > value)
-                            break;
-                        midIndex++;
-                    }
-                    return new Tuple<bool, int>(false, midIndex);
-                }
+        //}
+        //private byte? DisambiguateMiddleValue(TrieNode node, int level, int m)
+        //{
+        //    if (node.IsLeaf)
+        //        return DisambiguateByteValue(node.ChildIndices[m], level);
+        //    else
+        //        return _childTrieNodes[node.ChildIndices[m]].ByteValue;
+        //}
+        //// This binary search implementation returns a tuple:
+        //// * a bool which represents whether the search completed successfully
+        //// * an int representing either:
+        ////      - the index of the item searched for
+        ////      - the index of the location where the item should be placed to maintain a sorted list
+        //// Because of the second function, a tuple is necessary since we cannot return -1 to represent a failed search 
+        //private Tuple<bool, int> BinarySearch(TrieNode node, int level, byte? value)
+        //{
+        //    int leftBound = 0, rightBound = node.ChildIndices.Count - 1;
+        //    int midIndex = 0;
+        //    while (true)
+        //    {
+        //        if (leftBound > rightBound)  // if the search failed
+        //        {
+        //            // this loop is necessary because binary search takes the floor
+        //            // of the middle, which means it can give incorrect indices for insertion.
+        //            // we should never iterate up more than two indices.
+        //            while (midIndex < node.ChildIndices.Count)
+        //            {
+        //                byte? middleValue = DisambiguateMiddleValue(node, level, midIndex);
 
-                midIndex = (leftBound + rightBound) / 2; // find the middle value
+        //                if (middleValue > value)
+        //                    break;
+        //                midIndex++;
+        //            }
+        //            return new Tuple<bool, int>(false, midIndex);
+        //        }
 
-                byte? mValue;
-                if (node.IsLeaf)
-                    mValue = DisambiguateByteValue(node.ChildIndices[midIndex], level);
-                else
-                    mValue = _childTrieNodes[node.ChildIndices[midIndex]].ByteValue;
+        //        midIndex = (leftBound + rightBound) / 2; // find the middle value
 
-                if (mValue < value)
-                    leftBound = midIndex + 1;
-                else if (mValue > value)
-                    rightBound = midIndex - 1;
-                else if (mValue == value)
-                    return new Tuple<bool, int>(true, midIndex);
-                else // one of the values is null and they are != to each other
-                {
-                    if (mValue == null) // mValue < value
-                        leftBound = midIndex + 1;
-                    else // mValue > value (since value == null)
-                        rightBound = midIndex - 1;
-                }
-            }
-        }
+        //        byte? mValue;
+        //        if (node.IsLeaf)
+        //            mValue = DisambiguateByteValue(node.ChildIndices[midIndex], level);
+        //        else
+        //            mValue = _childTrieNodes[node.ChildIndices[midIndex]].ByteValue;
+
+        //        if (mValue < value)
+        //            leftBound = midIndex + 1;
+        //        else if (mValue > value)
+        //            rightBound = midIndex - 1;
+        //        else if (mValue == value)
+        //            return new Tuple<bool, int>(true, midIndex);
+        //        else // one of the values is null and they are != to each other
+        //        {
+        //            if (mValue == null) // mValue < value
+        //                leftBound = midIndex + 1;
+        //            else // mValue > value (since value == null)
+        //                rightBound = midIndex - 1;
+        //        }
+        //    }
+        //}
         // This binary search implementation searches _parsingTrieList rather than
         // a specific node. This should help with performances for cases where there
         // is a flat trie, as we operate directly on the sorted list of nodes rather than
         // on a node which contains a sorted list of indices into a separate list.
+
         private Tuple<bool, int> BinarySearch(byte? value)
         {
-            int leftBound = 0, rightBound = _parsingTrieList.Count - 1;
+            int leftBound = 0, rightBound = _parsingTrie.Length - 1;
             int midIndex = 0;
             while (true)
             {
